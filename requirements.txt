@@ -1,0 +1,11 @@
+torchkbnufft==1.4.0
+imageio==2.18.0
+tensorboard==2.15.0
+h5py==3.9.0
+scikit-image==0.20.0
+tqdm==4.67.1
+numpy==1.26.4
+scipy==1.15.3
+monai==1.4.0
+sigpy==0.1.27
+lpips==0.1.4

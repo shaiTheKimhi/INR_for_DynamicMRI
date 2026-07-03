@@ -4,7 +4,7 @@ Official code for "Spatiotemporal implicit neural representation for unsupervise
 ## 1. Environmental Requirements  
 ### To run the reconstruction demo, the following dependencies are required:  
 * Python 3.10.X  ***(Important)***
-* PyTorch 2.0.0
+* PyTorch 2.3.0
 * torchkbnufft 1.4.0
 * [tiny-cuda-nn 1.7](https://github.com/NVlabs/tiny-cuda-nn)
 * imageio 2.18.0

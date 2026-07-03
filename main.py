@@ -26,6 +26,8 @@ from torch.utils.tensorboard import SummaryWriter
 from utils import coil_combine, path_checker, visual_mag, visual_err_mag, gen_traj, NUFFT
 from scipy import io
 from model import INR
+from CineDataset import CineDataset, CMRxReconToINRDataset
+from inr.utils import metrics_extended
 
 params = {
     'n_levels': 16,
@@ -54,16 +56,34 @@ spoke_num = args.spokes
 epoch = params['epochs']
 relL2_eps = 1e-4
 
-
-log_path = './log_cmr/spoke{}_{}'.format(spoke_num, str(datetime.datetime.now().strftime('%y%m%d_%H%M%S')))
+base_path = r"/synology-data/users/naamagav/CMRxRec_for_project"
+log_path = os.path.join(base_path, 'log_cmr', 'spoke{}_{}'.format(spoke_num, str(datetime.datetime.now().strftime('%y%m%d_%H%M%S'))))
 path_checker(log_path)
 writer = SummaryWriter(log_path)
+dataset_path = os.path.join(base_path, 'ChallengeData_test', 'MultiCoil', 'Cine', 'TestSet', 'FullSample')
+cds = CineDataset(dataset_path)
 
-# Import and Preprocess Data
-mat_path = './test_cardiac.mat'
-with h5py.File(mat_path, 'r') as f:
-    img = f['img'][:]
-    smap = f['smap'][:]
+ds = CMRxReconToINRDataset(
+    base_dataset=cds,
+    kspace_key="kspace_full",
+    z_index=2,
+    input_order="nxnycnznt",
+    crop_square=True,
+    crop_size=204,
+    return_torch=True,
+)
+
+x = ds[0]
+# Test is on P002 in the testset 
+
+img = x['img'][:]
+smap = x['smap'][:]
+
+# # Import and Preprocess Data
+# mat_path = './test_cardiac.mat'
+# with h5py.File(mat_path, 'r') as f:
+#     img = f['img'][:]
+#     smap = f['smap'][:]
 img = torch.as_tensor(img).to(device)
 smap = torch.as_tensor(smap).to(device)
 frames = img.shape[0]
@@ -86,6 +106,8 @@ pos = inr.build_pos(grid_size, frames)
 psnr = 0.0
 ssim = 0.0
 time_usage = 0.0
+best_epoch = 0
+best_intensity = None
 epoch_loop = tqdm(range(epoch), total=epoch, leave=True)
 for e in epoch_loop:
 
@@ -110,7 +132,20 @@ for e in epoch_loop:
         writer.add_scalar('ssim', ssim_tmp, e + 1)
         if psnr_tmp > psnr:
             psnr = psnr_tmp
+            ssim = ssim_tmp
+            best_intensity = intensity.clone().detach()
+            best_epoch = e + 1
 
 # Summary
 print('Best PSNR: {:.4f}'.format(psnr))
+print('SSIM: {:.4f}'.format(ssim))
+print('Best Epoch: {}'.format(best_epoch))
 print('Time Consumption: {:.2f}s'.format(time_usage))
+
+if best_intensity is not None:
+    metrics_dict = metrics_extended(best_intensity, img_gt, time_usage, log_path + '/proposed_{}_{}_abs_err_metrics.txt'.format(spoke_num, frames))
+    visual_mag(best_intensity,
+    log_path + '/proposed_{}_{}_abs_{}.png'.format(spoke_num, frames, best_epoch))
+    visual_err_mag(best_intensity, img_gt, log_path + '/proposed_{}_{}_abs_err_{}.png'.format(spoke_num, frames, best_epoch))
+else:
+    print("Warning: Training finished without running inference/evaluation.")

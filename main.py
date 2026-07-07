@@ -23,9 +23,10 @@ import h5py
 from tqdm import tqdm
 
 from torch.utils.tensorboard import SummaryWriter
-from utils import coil_combine, path_checker, visual_mag, visual_err_mag, gen_traj, NUFFT
+from inr.utils import coil_combine, path_checker, visual_mag, visual_err_mag, gen_traj, NUFFT
 from scipy import io
-from model import INR
+from inr.model import INR
+from CineDataset import CMRxReconToINRDataset, CineDataset
 
 params = {
     'n_levels': 16,
@@ -39,7 +40,7 @@ params = {
     "tv_weight": args.tv_weight,
     "lr_weight": args.lr_weight,
     "stv_weight": args.stv_weight,
-    "epochs": args.epochs, 
+    "epochs": args.epochs,
     "mask": args.mask,
     "relL2": args.relL2
 }
@@ -60,10 +61,25 @@ path_checker(log_path)
 writer = SummaryWriter(log_path)
 
 # Import and Preprocess Data
-mat_path = './test_cardiac.mat'
-with h5py.File(mat_path, 'r') as f:
-    img = f['img'][:]
-    smap = f['smap'][:]
+cds = CineDataset(r"D:\MRI_DATASETS\Test")
+
+ds = CMRxReconToINRDataset(
+    base_dataset=cds,
+    kspace_key="kspace_full",
+    z_index=0,
+    input_order="nxnycnznt",
+    crop_square=True,
+    return_torch=True,
+)
+
+# mat_path = './test_cardiac.mat'
+# with h5py.File(mat_path, 'r') as f:
+#     img = f['img'][:]
+#     smap = f['smap'][:]
+x = ds[0]
+img = x['img']
+smap = x['smap']
+
 img = torch.as_tensor(img).to(device)
 smap = torch.as_tensor(smap).to(device)
 frames = img.shape[0]

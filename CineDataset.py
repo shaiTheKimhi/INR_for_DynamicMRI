@@ -243,8 +243,8 @@ class CMRxReconToINRDataset(Dataset):
                     sample[k] = v
 
         if self.return_torch:
-            sample["img"] = torch.from_numpy(sample["img"])
-            sample["smap"] = torch.from_numpy(sample["smap"])
+            sample["img"] = torch.tensor(sample["img"])
+            sample["smap"] = torch.tensor(sample["smap"])
 
         return sample
 

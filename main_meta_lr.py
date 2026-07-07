@@ -2,8 +2,8 @@ import os
 import argparse
 
 parser = argparse.ArgumentParser()
-parser.add_argument('-s', '--spokes', type=int, metavar='', required=True)
-parser.add_argument('-g', '--gpu', type=int, metavar='', required=True)
+parser.add_argument('-s', '--spokes', type=int, metavar='', required=False, default=10)
+parser.add_argument('-g', '--gpu', type=int, metavar='', required=False, default=0)
 parser.add_argument('-t', '--tv_weight', type=float, metavar='', required=False, default=0.02)
 parser.add_argument('-l', '--lr_weight', type=float, metavar='', required=False, default=0.0002)
 parser.add_argument('-st', '--stv_weight', type=float, metavar='', required=False, default=0) # Just in case
@@ -59,7 +59,8 @@ def safe_train(self, pos, kdata, e):
     self.optimizer.zero_grad()
     self.loss_train.backward()
     self.optimizer.step()
-    self.scheduler.step()
+    if getattr(self.scheduler, 'step_size', 0) > 0:
+        self.scheduler.step()
     return (intensity, time.time() - timepoint)
 
 def safe_infer(self, pos, img_gt, smap, sscale=1, tscale=1):
@@ -121,6 +122,20 @@ writer = SummaryWriter(log_path)
 
 # Import and Preprocess Data
 cds = CineDataset(args.data_dir)
+
+# Filter examples that do not contain cine_lax.mat to avoid FileNotFoundError
+valid_indices = [
+    i for i, ex in enumerate(cds.examples)
+    if os.path.exists(os.path.join(args.data_dir, ex, "cine_lax.mat"))
+]
+if len(valid_indices) == 0:
+    raise ValueError(f"No valid examples containing 'cine_lax.mat' found in {args.data_dir}")
+
+if args.test_index not in valid_indices:
+    fallback_index = valid_indices[0]
+    print(f"Warning: requested test_index {args.test_index} is invalid (missing 'cine_lax.mat'). Falling back to index {fallback_index}.")
+    args.test_index = fallback_index
+
 ds = CMRxReconToINRDataset(
     base_dataset=cds,
     kspace_key="kspace_full",
@@ -152,7 +167,7 @@ meta_inr = INR(test_nufft_op, params, lr, relL2_eps)
 meta_inr.to(device) if hasattr(meta_inr, 'to') else None
 
 # Training pool indices (exclude test subject)
-train_indices = [i for i in range(len(ds)) if i != args.test_index]
+train_indices = [i for i in valid_indices if i != args.test_index]
 if len(train_indices) == 0:
     # Fallback to including all if dataset only has 1 example
     train_indices = [args.test_index]
@@ -255,8 +270,7 @@ for e in epoch_loop:
                            lowrank_loss=test_inr.lowrank_loss.item())
     writer.add_scalar('loss_test_train', test_inr.loss_train, e + 1)
 
-    # Inferring
-    if (e + 1) % summary_epoch == 0:
+    if (e + 1) % summary_epoch == 0 or e == epoch - 1:
         with torch.no_grad():
             intensity, psnr_tmp, ssim_tmp = test_inr.infer(pos_test, img_gt_test, smap_test)
         io.savemat(log_path + '/proposed_{}.mat'.format(e+1),

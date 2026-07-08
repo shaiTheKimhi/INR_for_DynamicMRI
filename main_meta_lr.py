@@ -250,6 +250,11 @@ for me in range(meta_epochs):
 print('Best Meta PSNR during pretraining: {:.4f}'.format(best_meta_psnr))
 print('Meta-training finished.\n')
 
+# Save model after meta-learning
+meta_model_save_path = os.path.join(log_path, 'meta_model.pth')
+torch.save(meta_inr.state_dict(), meta_model_save_path)
+print(f'Saved meta-learned model weights to: {meta_model_save_path}\n')
+
 # Final test subject training and inference (like in main.py)
 print('Starting final adaptation and reconstruction on test subject...')
 test_inr = INR(test_nufft_op, params, lr, relL2_eps)
@@ -260,6 +265,11 @@ pos_test = test_inr.build_pos(grid_size_test, frames_test)
 best_test_psnr = 0.0
 best_test_ssim = 0.0
 time_usage = 0.0
+convergence_epochs = []
+convergence_times = []
+convergence_psnrs = []
+convergence_ssims = []
+
 epoch_loop = tqdm(range(epoch), total=epoch, leave=True)
 for e in epoch_loop:
     # Training
@@ -280,6 +290,19 @@ for e in epoch_loop:
         visual_err_mag(intensity, img_gt_test, log_path + '/proposed_{}_{}_abs_err_{}.png'.format(spoke_num, frames_test, e+1))
         writer.add_scalar('test_psnr', psnr_tmp, e + 1)
         writer.add_scalar('test_ssim', ssim_tmp, e + 1)
+        
+        convergence_epochs.append(e + 1)
+        convergence_times.append(time_usage)
+        convergence_psnrs.append(psnr_tmp)
+        convergence_ssims.append(ssim_tmp)
+        
+        io.savemat(log_path + '/convergence_metrics.mat', {
+            'epochs': np.array(convergence_epochs),
+            'times': np.array(convergence_times),
+            'psnrs': np.array(convergence_psnrs),
+            'ssims': np.array(convergence_ssims)
+        })
+        
         if psnr_tmp > best_test_psnr:
             best_test_psnr = psnr_tmp
             best_test_ssim = ssim_tmp

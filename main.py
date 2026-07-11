@@ -73,7 +73,7 @@ ds = CMRxReconToINRDataset(
     return_torch=True,
 )
 
-x = ds[0]
+x = ds[1]
 # Test is on P002 in the testset 
 
 img = x['img'][:]

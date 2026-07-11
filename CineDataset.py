@@ -287,7 +287,7 @@ class CMRxReconToINRDataset(Dataset):
 
 
 if __name__ == "__main__":
-    cds = CineDataset(r"/synology-data/users/naamagav/CMRxRec_for_project/ChallengeData/MultiCoil/Cine/TrainingSet/FullSample")
+    cds = CineDataset(r"/synology-data/users/naamagav/CMRxRec_for_project/ChallengeData_test/MultiCoil/Cine/TestSet/FullSample")
 
     ds = CMRxReconToINRDataset(
         base_dataset=cds,
@@ -299,7 +299,7 @@ if __name__ == "__main__":
         return_torch=True,
     )
 
-    x = ds[0]
+    x = ds[1]
 
     import matplotlib.pyplot as plt
     # ## plot two images

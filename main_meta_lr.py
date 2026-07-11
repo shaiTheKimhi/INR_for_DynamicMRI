@@ -15,14 +15,15 @@ parser.add_argument('-e', '--epochs', type=int, metavar='', required=False, defa
 parser.add_argument('-m', '--mask', action='store_true', required=False)
 parser.add_argument('-r', '--relL2', action='store_true', required=False)
 # Meta-learning specific
-parser.add_argument('--meta_epochs', type=int, default=100, help='Number of meta-training iterations')
+parser.add_argument('--meta_epochs', type=int, default=20, help='Number of meta-training iterations')
 parser.add_argument('--meta_lr', type=float, default=0.1, help='Meta learning rate (Reptile step size)')
 parser.add_argument('--inner_steps', type=int, default=5, help='Inner adaptation steps per task')
 parser.add_argument('--tasks_per_meta', type=int, default=4, help='Number of tasks sampled per meta-iteration')
 parser.add_argument('--task_frames', type=int, default=1, help='Number of frames per task (support set size)')
 # Dataset specific
-parser.add_argument('--data_dir', type=str, default=r"D:\MRI_DATASETS\Test", help='Path to dataset directory')
-parser.add_argument('--test_index', type=int, default=0, help='Index of the example to use as test subject')
+parser.add_argument('--train_data_dir', type=str, default=r"D:\MRI_DATASETS\Train", help='Path to dataset directory')
+parser.add_argument('--valid_data_dir', type=str, default=r"D:\MRI_DATASETS\Valid", help='Path to validation dataset directory')
+parser.add_argument('--test_data_dir', type=str, default=r"D:\MRI_DATASETS\Test", help='Path to test dataset directory')
 parser.add_argument('--z_index', type=int, default=0, help='Slice index (z_index) to extract')
 args = parser.parse_args()
 os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
@@ -117,27 +118,37 @@ epoch = params['epochs']
 relL2_eps = 1e-4
 
 log_path = './log_cmr_meta/spoke{}_{}'.format(spoke_num, str(datetime.datetime.now().strftime('%y%m%d_%H%M%S')))
+# log_path = './log_cmr_meta/spoke10_260708_163244'
 path_checker(log_path)
 writer = SummaryWriter(log_path)
+meta_model_save_path = os.path.join(log_path, 'meta_model.pth')
 
 # Import and Preprocess Data
-cds = CineDataset(args.data_dir)
+cds_train = CineDataset(args.train_data_dir)
+cds_valid = CineDataset(args.valid_data_dir)
+cds_test = CineDataset(args.test_data_dir)
 
-# Filter examples that do not contain cine_lax.mat to avoid FileNotFoundError
+# Filter examples that do not contain cine_lax.mat to avoid FileNotFoundError (using test set for meta‑training pool)
 valid_indices = [
-    i for i, ex in enumerate(cds.examples)
-    if os.path.exists(os.path.join(args.data_dir, ex, "cine_lax.mat"))
+    i for i, ex in enumerate(cds_valid.examples)
+    if os.path.exists(os.path.join(cds_valid.directory, ex, "cine_lax.mat"))
 ]
 if len(valid_indices) == 0:
-    raise ValueError(f"No valid examples containing 'cine_lax.mat' found in {args.data_dir}")
+    raise ValueError(f"No valid examples containing 'cine_lax.mat' found in {args.test_data_dir}")
 
-if args.test_index not in valid_indices:
-    fallback_index = valid_indices[0]
-    print(f"Warning: requested test_index {args.test_index} is invalid (missing 'cine_lax.mat'). Falling back to index {fallback_index}.")
-    args.test_index = fallback_index
+# Use the first valid example as the test subject
+test_subject_idx = valid_indices[0]
 
-ds = CMRxReconToINRDataset(
-    base_dataset=cds,
+train_ds = CMRxReconToINRDataset(
+    base_dataset=cds_train,
+    kspace_key="kspace_full",
+    z_index=args.z_index,
+    input_order="nxnycnznt",
+    crop_square=True,
+    return_torch=True,
+)
+test_ds = CMRxReconToINRDataset(
+    base_dataset=cds_test,
     kspace_key="kspace_full",
     z_index=args.z_index,
     input_order="nxnycnznt",
@@ -146,7 +157,7 @@ ds = CMRxReconToINRDataset(
 )
 
 # Prepare Test Subject Data
-x_test = ds[args.test_index]
+x_test = test_ds[test_subject_idx]
 img_test = x_test['img'].to(device)
 smap_test = x_test['smap'].to(device)
 frames_test = img_test.shape[0]
@@ -156,21 +167,43 @@ spoke_length_test = grid_size_test * 2
 img_gt_test = coil_combine(img_test, smap_test)
 scale_factor_test = torch.abs(img_gt_test).max()
 img_gt_test /= scale_factor_test
-
 ktraj_test = gen_traj(GA, spoke_length_test, frames_test * spoke_num).reshape(2, frames_test, -1).transpose(1, 0)
 dcomp_test = torch.abs(torch.linspace(-1, 1, spoke_length_test)).repeat([spoke_num, 1]).to(device)
 test_nufft_op = NUFFT(ktraj_test, dcomp_test, smap_test)
 kdata_test = test_nufft_op.forward(img_gt_test).reshape([frames_test, coil_num_test, spoke_num, spoke_length_test])
-
+# Validation dataset (separate from training and test)
+valid_ds = CMRxReconToINRDataset(
+    base_dataset=cds_valid,
+    kspace_key="kspace_full",
+    z_index=args.z_index,
+    input_order="nxnycnznt",
+    crop_square=True,
+    return_torch=True,
+)
+# Use first example for validation
+val_subject_idx = 0
+x_val = valid_ds[val_subject_idx]
+img_val = x_val['img'].to(device)
+smap_val = x_val['smap'].to(device)
+frames_val = img_val.shape[0]
+coil_num_val = img_val.shape[1]
+grid_size_val = img_val.shape[-1]
+spoke_length_val = grid_size_val * 2
+img_gt_val = coil_combine(img_val, smap_val)
+scale_factor_val = torch.abs(img_gt_val).max()
+img_gt_val /= scale_factor_val
+ktraj_val = gen_traj(GA, spoke_length_val, frames_val * spoke_num).reshape(2, frames_val, -1).transpose(1, 0)
+dcomp_val = torch.abs(torch.linspace(-1, 1, spoke_length_val)).repeat([spoke_num, 1]).to(device)
+val_nufft_op = NUFFT(ktraj_val, dcomp_val, smap_val)
+kdata_val = val_nufft_op.forward(img_gt_val).reshape([frames_val, coil_num_val, spoke_num, spoke_length_val])
 # Initialize meta model (anchored on test dimensions)
 meta_inr = INR(test_nufft_op, params, lr, relL2_eps)
 meta_inr.to(device) if hasattr(meta_inr, 'to') else None
 
 # Training pool indices (exclude test subject)
-train_indices = [i for i in valid_indices if i != args.test_index]
+train_indices = [i for i in valid_indices if i != test_subject_idx]
 if len(train_indices) == 0:
-    # Fallback to including all if dataset only has 1 example
-    train_indices = [args.test_index]
+    train_indices = [test_subject_idx]
 
 # Reptile-style meta-training loop
 meta_epochs = args.meta_epochs
@@ -179,7 +212,9 @@ inner_steps = args.inner_steps
 tasks_per_meta = args.tasks_per_meta
 task_frames = args.task_frames
 
+# Remove early‑stopping variables
 best_meta_psnr = 0.0
+# patience_counter and meta_patience are no longer used
 print("Starting meta-learning pretraining...")
 for me in range(meta_epochs):
     # Sample tasks and accumulate adapted weights
@@ -187,7 +222,10 @@ for me in range(meta_epochs):
     for t in range(tasks_per_meta):
         # Sample a subject from training pool
         sub_idx = np.random.choice(train_indices)
-        x_sub = ds[sub_idx]
+        try:
+            x_sub = train_ds[sub_idx]
+        except:
+            continue
         img_sub = x_sub['img'].to(device)
         smap_sub = x_sub['smap'].to(device)
         frames_sub = img_sub.shape[0]
@@ -214,46 +252,42 @@ for me in range(meta_epochs):
         adapt_inr = INR(task_nufft, params, lr, relL2_eps)
         adapt_inr.load_state_dict(meta_inr.state_dict())
         adapt_inr.to(device) if hasattr(adapt_inr, 'to') else None
-        
+
         # Build positions for task
         pos_task = adapt_inr.build_pos(task_nufft.grid_size, task_nufft.frame_num)
-        
+
         # Inner adaptation
         for istep in range(inner_steps):
             adapt_inr.train(pos_task, task_kdata, istep)
-            
+
         # Get adapted weights
         adapted_state = adapt_inr.state_dict()
-        
+
         # Reptile meta-update: move meta_state toward adapted_state
         with torch.no_grad():
             for k in meta_state.keys():
                 meta_state[k] = meta_state[k] + meta_lr * (adapted_state[k].to(meta_state[k].device) - meta_state[k])
-                
+
     # Load updated meta parameters
     meta_inr.load_state_dict(meta_state)
 
-    # Optional evaluation on test data every few meta-iterations
+    # Optional evaluation on validation data every few meta-iterations
     if (me + 1) % (max(1, summary_epoch // 10)) == 0 or me == meta_epochs - 1:
-        with torch.no_grad():
-            pos_test = meta_inr.build_pos(grid_size_test, frames_test)
-            intensity, psnr_tmp, ssim_tmp = meta_inr.infer(pos_test, img_gt_test, smap_test)
-        io.savemat(log_path + '/meta_proposed_{}.mat'.format(me+1), {'img_proposed': intensity.cpu().numpy()})
-        visual_mag(intensity, log_path + '/meta_proposed_{}_{}_abs_{}.png'.format(spoke_num, frames_test, me+1))
-        visual_err_mag(intensity, img_gt_test, log_path + '/meta_proposed_{}_{}_abs_err_{}.png'.format(spoke_num, frames_test, me+1))
-        writer.add_scalar('meta_psnr', psnr_tmp, me + 1)
-        writer.add_scalar('meta_ssim', ssim_tmp, me + 1)
-        print('[MetaIter {}/{}] Test Subject PSNR: {:.4f} SSIM: {:.4f}'.format(me+1, meta_epochs, psnr_tmp, ssim_tmp))
-        if psnr_tmp > best_meta_psnr:
-            best_meta_psnr = psnr_tmp
-
-print('Best Meta PSNR during pretraining: {:.4f}'.format(best_meta_psnr))
+        # Validation on separate validation dataset
+        pos_val = meta_inr.build_pos(grid_size_val, frames_val)
+        intensity_val, psnr_val, ssim_val = meta_inr.infer(pos_val, img_gt_val, smap_val)
+        io.savemat(log_path + '/meta_val_{}.mat'.format(me+1), {'img_proposed': intensity_val.cpu().numpy()})
+        visual_mag(intensity_val, log_path + '/meta_val_{}_{}_abs_{}.png'.format(spoke_num, frames_val, me+1))
+        visual_err_mag(intensity_val, img_gt_val, log_path + '/meta_val_{}_{}_abs_err_{}.png'.format(spoke_num, frames_val, me+1))
+        writer.add_scalar('meta_val_psnr', psnr_val, me + 1)
+        writer.add_scalar('meta_val_ssim', ssim_val, me + 1)
+        print('[MetaIter {}/{}] Validation PSNR: {:.4f} SSIM: {:.4f}'.format(me+1, meta_epochs, psnr_val, ssim_val))
+        if psnr_val > best_meta_psnr:
+            best_meta_psnr = psnr_val
+            torch.save(meta_inr.state_dict(), meta_model_save_path)
 print('Meta-training finished.\n')
 
-# Save model after meta-learning
-meta_model_save_path = os.path.join(log_path, 'meta_model.pth')
-torch.save(meta_inr.state_dict(), meta_model_save_path)
-print(f'Saved meta-learned model weights to: {meta_model_save_path}\n')
+
 
 # Final test subject training and inference (like in main.py)
 print('Starting final adaptation and reconstruction on test subject...')

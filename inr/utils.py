@@ -12,6 +12,7 @@ from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 import torch.nn.functional as F
 from monai.metrics import FIDMetric, SSIMMetric, PSNRMetric, compute_frechet_distance
 from monai.losses import PerceptualLoss
+import torchvision.models as models
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 jet_cmap = cm.get_cmap('jet')
@@ -261,13 +262,14 @@ def compute_cmmd(x: torch.Tensor, y: torch.Tensor, kernel: str = 'rbf', bandwidt
     return mmd.item()
 
 
-def metrics_extended(imgs: torch.Tensor, gts: torch.Tensor, file_path: Optional[str] = None) -> dict:
+def metrics_extended(imgs: torch.Tensor, gts: torch.Tensor, time_usage: float = 0.0, file_path: Optional[str] = None) -> dict:
     """
     Compute extended metrics: PSNR, SSIM, FID, LPIPS, TV gradient, and cMMD.
 
     Args:
         imgs: Predicted images (frames, channels, height, width)
         gts: Ground truth images (frames, channels, height, width)
+        time_usage: Total time used for training
         file_path: Optional path to save metrics
 
     Returns:
@@ -306,19 +308,52 @@ def metrics_extended(imgs: torch.Tensor, gts: torch.Tensor, file_path: Optional[
         gts_norm = gts_norm.repeat(1, 3, 1, 1)
 
     # LPIPS using PerceptualLoss (requires images in range [0, 1], 3 channels)
+    # try:
+    #     lpips_loss = PerceptualLoss(spatial_dims=2, network_type='alex', reduction='mean')
+    #     lpips_loss = lpips_loss.to(device)
+    #     lpips_value = lpips_loss(imgs_norm, gts_norm).item()
+    # except Exception as e:
+    #     print(f"LPIPS computation failed: {e}")
+    #     lpips_value = 0.0
+
     try:
-        lpips_loss = PerceptualLoss(spatial_dims=2, network_type='alex', reduction='mean')
+        lpips_loss = PerceptualLoss(spatial_dims=2, network_type='alex')
         lpips_loss = lpips_loss.to(device)
-        lpips_value = lpips_loss(imgs_norm, gts_norm).item()
+
+        # Calculate loss and manually apply .mean() before calling .item()
+        lpips_value = lpips_loss(imgs_norm, gts_norm).mean().item()
     except Exception as e:
         print(f"LPIPS computation failed: {e}")
         lpips_value = 0.0
 
     # FID (requires images in range [0, 1], 3 channels)
+    # try:
+    #     fid_metric = FIDMetric()  # (input_img_num_samples=min(frames, 10))
+    #     # FID expects real and fake samples
+    #     fid_value = fid_metric(imgs_norm, gts_norm).item()
+    # except Exception as e:
+    #     print(f"FID computation failed: {e}")
+    #     fid_value = 0.0
+
     try:
-        fid_metric = FIDMetric()  # (input_img_num_samples=min(frames, 10))
-        # FID expects real and fake samples
-        fid_value = fid_metric(imgs_norm, gts_norm).item()
+
+        # 1. Load standard InceptionV3 model to extract features
+        inception = models.inception_v3(weights='DEFAULT').to(device)
+        inception.fc = torch.nn.Identity() # Strip classification layer to get raw features
+        inception.eval()
+
+        with torch.no_grad():
+            # Inception requires images to be resized to 299x299
+            imgs_resized = F.interpolate(imgs_norm, size=(299, 299), mode='bilinear', align_corners=False)
+            gts_resized = F.interpolate(gts_norm, size=(299, 299), mode='bilinear', align_corners=False)
+
+            # Extract features (Shape will now be: [frames, 2048])
+            feat_imgs = inception(imgs_resized)
+            feat_gts = inception(gts_resized)
+
+        # 2. Feed the extracted features into MONAI's FIDMetric
+        fid_metric = FIDMetric()
+        fid_value = fid_metric(feat_imgs, feat_gts).item()
     except Exception as e:
         print(f"FID computation failed: {e}")
         fid_value = 0.0
@@ -341,7 +376,8 @@ def metrics_extended(imgs: torch.Tensor, gts: torch.Tensor, file_path: Optional[
         'lpips_mean': lpips_value,
         'fid_mean': fid_value,
         'tv_gradient': tv_grad,
-        'cmmd_mean': cmmd_value
+        'cmmd_mean': cmmd_value,
+        'time_usage': time_usage
     }
 
     if file_path is not None:
@@ -356,5 +392,6 @@ def metrics_extended(imgs: torch.Tensor, gts: torch.Tensor, file_path: Optional[
             f.writelines('FID: {:.6f}\n'.format(fid_value))
             f.writelines('TV Gradient: {:.6f}\n'.format(tv_grad))
             f.writelines('cMMD: {:.6f}\n'.format(cmmd_value))
+            f.writelines('Time Consumption: {:.2f}s\n'.format(time_usage))
 
     return metrics_dict

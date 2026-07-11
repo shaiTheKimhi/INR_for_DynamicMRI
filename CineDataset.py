@@ -1,8 +1,10 @@
 import os
+from utils import coil_combine, visual_mag
 import numpy as np
 from mat73 import loadmat
 import torch
 from torch.utils.data import Dataset, DataLoader
+import sigpy.mri as mr
 
 
 class CineDataset(Dataset):
@@ -17,7 +19,7 @@ class CineDataset(Dataset):
     def __getitem__(self, item):
         example = self.examples[item]
         ## load .mat file
-        arr = loadmat(os.path.join(self.directory, example, "cine_lax.mat"))
+        arr = loadmat(os.path.join(self.directory, example, "cine_sax.mat"))
         return arr
 
 
@@ -85,6 +87,28 @@ def center_crop_square(x):
 
     return x[..., h0:h0 + n, w0:w0 + n]
 
+def center_crop_fixed(x, crop_size=204):
+    """
+    Center-crop the last two dimensions to a fixed square size.
+
+    Input:
+        x: [..., H, W]
+        crop_size: int, the desired output size (default: 204)
+
+    Output:
+        x: [..., crop_size, crop_size]
+    """
+    h, w = x.shape[-2], x.shape[-1]
+
+    # Safety check: ensure the image is at least 204x204
+    if h < crop_size or w < crop_size:
+        raise ValueError(f"Cannot crop {h}x{w} to {crop_size}x{crop_size}. Input is too small.")
+
+    h0 = (h - crop_size) // 2
+    w0 = (w - crop_size) // 2
+
+    return x[..., h0:h0 + crop_size, w0:w0 + crop_size]
+
 
 def estimate_smap_from_rss(img_tchw, eps=1e-8):
     """
@@ -127,6 +151,7 @@ class CMRxReconToINRDataset(Dataset):
         z_index=0,
         input_order="nxnycnznt",
         crop_square=True,
+        crop_size=204,
         return_torch=True,
         keep_original_item=False,
     ):
@@ -148,9 +173,13 @@ class CMRxReconToINRDataset(Dataset):
                 "nxnycnznt" means [nx, ny, nc, nz, nt].
                 "ntnzncnynx" can be used if your helper gives HDF5-reversed arrays.
 
+
             crop_square:
                 If True, crop spatial dimensions to H == W.
                 The original INR code assumes a square grid.
+
+            crop_size:
+                If provided, crop spatial dimensions to [crop_size, crop_size].
 
             return_torch:
                 If True, return torch complex tensors.
@@ -164,6 +193,7 @@ class CMRxReconToINRDataset(Dataset):
         self.z_index = z_index
         self.input_order = input_order
         self.crop_square = crop_square
+        self.crop_size = crop_size
         self.return_torch = return_torch
         self.keep_original_item = keep_original_item
 
@@ -215,6 +245,10 @@ class CMRxReconToINRDataset(Dataset):
         # Select one slice/view:
         # [nx, ny, nc, nt]
         kspace_z = kspace[:, :, :, self.z_index, :]
+        kspace_z_trans = np.transpose(kspace_z, (3, 2, 0, 1))  # [nt, nc, nx, ny]
+
+        smap = mr.app.EspiritCalib(np.mean(kspace_z_trans, axis=0),crop=0).run()
+        smap = smap.astype(np.complex64)
 
         # Convert Cartesian k-space to coil images:
         # [nx, ny, nc, nt]
@@ -225,11 +259,14 @@ class CMRxReconToINRDataset(Dataset):
         img = np.transpose(coil_imgs, (3, 2, 0, 1)).astype(np.complex64)
 
         if self.crop_square:
-            img = center_crop_square(img)
+            # img = center_crop_square(img)
+            # smap = center_crop_square(smap)
+            img = center_crop_fixed(img, crop_size=self.crop_size)
+            smap = center_crop_fixed(smap, crop_size=self.crop_size)
 
-        # Estimate sensitivity maps:
-        # [C, H, W]
-        smap = estimate_smap_from_rss(img)
+        # # Estimate sensitivity maps:
+        # # [C, H, W]
+        # smap = estimate_smap_from_rss(img)
 
         sample = {
             "img": img,
@@ -255,14 +292,14 @@ if __name__ == "__main__":
     ds = CMRxReconToINRDataset(
         base_dataset=cds,
         kspace_key="kspace_full",
-        z_index=0,
+        z_index=2,
         input_order="nxnycnznt",
         crop_square=True,
+        crop_size=204,
         return_torch=True,
     )
 
     x = ds[0]
-
 
     import matplotlib.pyplot as plt
     ## plot two images
@@ -276,6 +313,10 @@ if __name__ == "__main__":
     # axes[1].imshow(np.abs(x['img'][0, 0]), cmap='gray')
     # axes[1].set_title('Image 2 (Magnitude)')
     # axes[1].axis('off')
+
+    plt.tight_layout()
+    plt.savefig("test.png", dpi=300)
+    plt.show()
 
     plt.tight_layout()
     plt.show()

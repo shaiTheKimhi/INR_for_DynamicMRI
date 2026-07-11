@@ -23,7 +23,7 @@ import h5py
 from tqdm import tqdm
 
 from torch.utils.tensorboard import SummaryWriter
-from inr.utils import coil_combine, path_checker, visual_mag, visual_err_mag, gen_traj, NUFFT
+from inr.utils import coil_combine, path_checker, visual_mag, visual_err_mag, gen_traj, NUFFT, metrics, metrics_extended
 from scipy import io
 from inr.model import INR
 from CineDataset import CMRxReconToINRDataset, CineDataset
@@ -72,13 +72,11 @@ ds = CMRxReconToINRDataset(
     return_torch=True,
 )
 
-# mat_path = './test_cardiac.mat'
-# with h5py.File(mat_path, 'r') as f:
-#     img = f['img'][:]
-#     smap = f['smap'][:]
+# Test is on P002 in the testset
+
 x = ds[0]
-img = x['img']
-smap = x['smap']
+img = x['img'][:]
+smap = x['smap'][:]
 
 img = torch.as_tensor(img).to(device)
 smap = torch.as_tensor(smap).to(device)
@@ -129,22 +127,25 @@ for e in epoch_loop:
         visual_err_mag(intensity, img_gt, log_path + '/proposed_{}_{}_abs_err_{}.png'.format(spoke_num, frames, e+1))
         writer.add_scalar('psnr', psnr_tmp, e + 1)
         writer.add_scalar('ssim', ssim_tmp, e + 1)
-        
+
         convergence_epochs.append(e + 1)
         convergence_times.append(time_usage)
         convergence_psnrs.append(psnr_tmp)
         convergence_ssims.append(ssim_tmp)
-        
+
         io.savemat(log_path + '/convergence_metrics.mat', {
             'epochs': np.array(convergence_epochs),
             'times': np.array(convergence_times),
             'psnrs': np.array(convergence_psnrs),
             'ssims': np.array(convergence_ssims)
         })
-        
+
         if psnr_tmp > psnr:
             psnr = psnr_tmp
+        if ssim < ssim_tmp:
+            ssim = ssim_tmp
 
 # Summary
 print('Best PSNR: {:.4f}'.format(psnr))
+print('Best Test SSIM: {:.4f}'.format(ssim))
 print('Time Consumption: {:.2f}s'.format(time_usage))

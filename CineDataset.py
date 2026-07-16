@@ -7,21 +7,44 @@ from torch.utils.data import Dataset, DataLoader
 import sigpy.mri as mr
 
 
+# class CineDataset(Dataset):
+#     def __init__(self, directory: str):
+#         super().__init__()
+#         self.directory = directory
+#         self.examples = os.listdir(directory)
+
+#     def __len__(self):
+#         return len(self.examples)
+
+#     def __getitem__(self, item):
+#         example = self.examples[item]
+#         ## load .mat file
+#         arr = loadmat(os.path.join(self.directory, example, "cine_sax.mat"))
+#         return arr
 class CineDataset(Dataset):
     def __init__(self, directory: str):
         super().__init__()
         self.directory = directory
-        self.examples = os.listdir(directory)
+        self.file_paths = []
+        
+        # Iterate through subfolders to find P<number> directories
+        for item in os.listdir(directory):
+            dir_path = os.path.join(directory, item)
+            if os.path.isdir(dir_path) and item.startswith('P'):
+                # Check for both lax and sax files
+                for target_file in ['cine_sax.mat', 'cine_lax.mat']:
+                    file_path = os.path.join(dir_path, target_file)
+                    if os.path.exists(file_path):
+                        self.file_paths.append(file_path)
 
     def __len__(self):
-        return len(self.examples)
+        return len(self.file_paths)
 
     def __getitem__(self, item):
-        example = self.examples[item]
-        ## load .mat file
-        arr = loadmat(os.path.join(self.directory, example, "cine_sax.mat"))
+        file_path = self.file_paths[item]
+        arr = loadmat(file_path)
+        arr['source_file'] = file_path 
         return arr
-
 
 
 def to_complex_numpy(x):
@@ -278,6 +301,57 @@ class CMRxReconToINRDataset(Dataset):
             for k, v in base_item.items():
                 if k != self.kspace_key:
                     sample[k] = v
+
+        if self.return_torch:
+            sample["img"] = torch.from_numpy(sample["img"])
+            sample["smap"] = torch.from_numpy(sample["smap"])
+
+        return sample
+
+
+    def load_canonical_kspace(self, index):
+        """
+        Load + canonicalize k-space for one base_dataset item, without
+        picking a z_index yet. Returns kspace as [nx, ny, nc, nz, nt].
+        """
+        base_item = self.base_dataset[index]
+        kspace = self._extract_kspace(base_item)
+        kspace = to_complex_numpy(kspace).astype(np.complex64)
+        kspace = self._canonicalize_order(kspace)
+
+        if kspace.ndim != 5:
+            raise ValueError(
+                f"Expected kspace shape [nx, ny, nc, nz, nt], got {kspace.shape}"
+            )
+        source_file = base_item.get("source_file") if isinstance(base_item, dict) else None
+        return kspace, source_file
+
+    def get_slice(self, index, z_index, kspace=None):
+        """
+        Same processing as __getitem__, but takes an explicit z_index and
+        lets you pass in an already-loaded/canonicalized kspace array
+        """
+        if kspace is None:
+            kspace, _ = self.load_canonical_kspace(index)
+
+        nx, ny, nc, nz, nt = kspace.shape
+        if not (0 <= z_index < nz):
+            raise IndexError(f"z_index={z_index} is invalid for nz={nz}.")
+
+        kspace_z = kspace[:, :, :, z_index, :]
+        kspace_z_trans = np.transpose(kspace_z, (3, 2, 0, 1))  # [nt, nc, nx, ny]
+
+        smap = mr.app.EspiritCalib(np.mean(kspace_z_trans, axis=0), crop=0).run()
+        smap = smap.astype(np.complex64)
+
+        coil_imgs = ifft2c(kspace_z, axes=(0, 1))
+        img = np.transpose(coil_imgs, (3, 2, 0, 1)).astype(np.complex64)  # [T, C, H, W]
+
+        if self.crop_square:
+            img = center_crop_fixed(img, crop_size=self.crop_size)
+            smap = center_crop_fixed(smap, crop_size=self.crop_size)
+
+        sample = {"img": img, "smap": smap, "z_index": z_index}
 
         if self.return_torch:
             sample["img"] = torch.from_numpy(sample["img"])

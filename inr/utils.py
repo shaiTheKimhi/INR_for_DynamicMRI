@@ -262,7 +262,8 @@ def compute_cmmd(x: torch.Tensor, y: torch.Tensor, kernel: str = 'rbf', bandwidt
     return mmd.item()
 
 
-def metrics_extended(imgs: torch.Tensor, gts: torch.Tensor, time_usage: float = 0.0, file_path: Optional[str] = None) -> dict:
+def metrics_extended(imgs: torch.Tensor, gts: torch.Tensor, time_usage: float = 0.0, file_path: Optional[str] = None, lpips_model=None,
+    inception_model=None,) -> dict:
     """
     Compute extended metrics: PSNR, SSIM, FID, LPIPS, TV gradient, and cMMD.
 
@@ -316,12 +317,21 @@ def metrics_extended(imgs: torch.Tensor, gts: torch.Tensor, time_usage: float = 
     #     print(f"LPIPS computation failed: {e}")
     #     lpips_value = 0.0
 
-    try:
-        lpips_loss = PerceptualLoss(spatial_dims=2, network_type='alex')
-        lpips_loss = lpips_loss.to(device)
+    # try:
+    #     lpips_loss = PerceptualLoss(spatial_dims=2, network_type='alex')
+    #     lpips_loss = lpips_loss.to(device)
         
-        # Calculate loss and manually apply .mean() before calling .item()
-        lpips_value = lpips_loss(imgs_norm, gts_norm).mean().item()
+    #     # Calculate loss and manually apply .mean() before calling .item()
+    #     lpips_value = lpips_loss(imgs_norm, gts_norm).mean().item()
+    # except Exception as e:
+    #     print(f"LPIPS computation failed: {e}")
+    #     lpips_value = 0.0
+
+    try:
+        if lpips_model is None:
+            lpips_model = PerceptualLoss(spatial_dims=2, network_type='alex').to(device)
+        with torch.no_grad():
+            lpips_value = lpips_model(imgs_norm, gts_norm).mean().item()
     except Exception as e:
         print(f"LPIPS computation failed: {e}")
         lpips_value = 0.0
@@ -335,21 +345,44 @@ def metrics_extended(imgs: torch.Tensor, gts: torch.Tensor, time_usage: float = 
     #     print(f"FID computation failed: {e}")
     #     fid_value = 0.0
 
-    try:
+    # try:
         
+    #     # 1. Load standard InceptionV3 model to extract features
+    #     inception = models.inception_v3(weights='DEFAULT').to(device)
+    #     inception.fc = torch.nn.Identity() # Strip classification layer to get raw features
+    #     inception.eval()
+
+    #     with torch.no_grad():
+    #         # Inception requires images to be resized to 299x299
+    #         imgs_resized = F.interpolate(imgs_norm, size=(299, 299), mode='bilinear', align_corners=False)
+    #         gts_resized = F.interpolate(gts_norm, size=(299, 299), mode='bilinear', align_corners=False)
+            
+    #         # Extract features (Shape will now be: [frames, 2048])
+    #         feat_imgs = inception(imgs_resized)
+    #         feat_gts = inception(gts_resized)
+
+    #     # 2. Feed the extracted features into MONAI's FIDMetric
+    #     fid_metric = FIDMetric()
+    #     fid_value = fid_metric(feat_imgs, feat_gts).item()
+    # except Exception as e:
+    #     print(f"FID computation failed: {e}")
+    #     fid_value = 0.0
+
+    try:
         # 1. Load standard InceptionV3 model to extract features
-        inception = models.inception_v3(weights='DEFAULT').to(device)
-        inception.fc = torch.nn.Identity() # Strip classification layer to get raw features
-        inception.eval()
+        if inception_model is None:
+            inception_model = models.inception_v3(weights='DEFAULT').to(device)
+            inception_model.fc = torch.nn.Identity() # Strip classification layer to get raw features
+            inception_model.eval()
 
         with torch.no_grad():
             # Inception requires images to be resized to 299x299
             imgs_resized = F.interpolate(imgs_norm, size=(299, 299), mode='bilinear', align_corners=False)
             gts_resized = F.interpolate(gts_norm, size=(299, 299), mode='bilinear', align_corners=False)
-            
+
             # Extract features (Shape will now be: [frames, 2048])
-            feat_imgs = inception(imgs_resized)
-            feat_gts = inception(gts_resized)
+            feat_imgs = inception_model(imgs_resized)
+            feat_gts = inception_model(gts_resized)
 
         # 2. Feed the extracted features into MONAI's FIDMetric
         fid_metric = FIDMetric()
@@ -381,7 +414,7 @@ def metrics_extended(imgs: torch.Tensor, gts: torch.Tensor, time_usage: float = 
     }
 
     if file_path is not None:
-        with open(file_path, 'w') as f:
+        with open(file_path, 'w', encoding='utf-8') as f:    
             f.writelines('=== Extended Metrics ===\n')
             for i in range(frames):
                 f.writelines('Frame {}\tPSNR: {:.6f}\tSSIM: {:.6f}\n'.format(i + 1, psnr[i], ssim[i]))
@@ -395,3 +428,45 @@ def metrics_extended(imgs: torch.Tensor, gts: torch.Tensor, time_usage: float = 
             f.writelines('Time Consumption: {:.2f}s\n'.format(time_usage))
 
     return metrics_dict
+
+
+
+def aggregate_dataset_metrics(metrics_list: List[dict], file_path: str) -> dict:
+    """
+    Takes a list of metric dictionaries (one from each processed file) 
+    and computes the global average and standard deviation across the dataset.
+    """
+    if not metrics_list:
+        print("No metrics to aggregate.")
+        return {}
+
+    # Initialize a dictionary to hold lists of all values
+    aggregated_raw = {key: [] for key in metrics_list[0].keys()}
+    
+    # Extract values from each file's dictionary
+    for m in metrics_list:
+        for key, value in m.items():
+            aggregated_raw[key].append(value)
+            
+    final_summary = {}
+    
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.write("=========================================\n")
+        f.write("=== Final Dataset Aggregated Metrics ===\n")
+        f.write("=========================================\n")
+        f.write(f"Total files processed: {len(metrics_list)}\n\n")
+        
+        # Calculate and log the mean and std for each metric across all files
+        for key, values in aggregated_raw.items():
+
+            mean_val = np.mean(values)
+            std_val = np.std(values)
+            
+            final_summary[f'dataset_{key}_mean'] = mean_val
+            final_summary[f'dataset_{key}_std'] = std_val
+            
+            log_line = f"Dataset {key}: Mean = {mean_val:.6f} ± {std_val:.6f}\n"
+            print(log_line.strip())
+            f.write(log_line)
+            
+    return final_summary

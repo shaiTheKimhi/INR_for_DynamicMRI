@@ -381,7 +381,7 @@ def metrics_extended(imgs: torch.Tensor, gts: torch.Tensor, time_usage: float = 
     }
 
     if file_path is not None:
-        with open(file_path, 'w') as f:
+        with open(file_path, 'w', encoding='utf-8') as f:
             f.writelines('=== Extended Metrics ===\n')
             for i in range(frames):
                 f.writelines('Frame {}\tPSNR: {:.6f}\tSSIM: {:.6f}\n'.format(i + 1, psnr[i], ssim[i]))
@@ -395,3 +395,45 @@ def metrics_extended(imgs: torch.Tensor, gts: torch.Tensor, time_usage: float = 
             f.writelines('Time Consumption: {:.2f}s\n'.format(time_usage))
 
     return metrics_dict
+
+
+
+def aggregate_dataset_metrics(metrics_list: List[dict], file_path: str) -> dict:
+    """
+    Takes a list of metric dictionaries (one from each processed file)
+    and computes the global average and standard deviation across the dataset.
+    """
+    if not metrics_list:
+        print("No metrics to aggregate.")
+        return {}
+
+    # Initialize a dictionary to hold lists of all values
+    aggregated_raw = {key: [] for key in metrics_list[0].keys()}
+
+    # Extract values from each file's dictionary
+    for m in metrics_list:
+        for key, value in m.items():
+            aggregated_raw[key].append(value)
+
+    final_summary = {}
+
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.write("=========================================\n")
+        f.write("=== Final Dataset Aggregated Metrics ===\n")
+        f.write("=========================================\n")
+        f.write(f"Total files processed: {len(metrics_list)}\n\n")
+
+        # Calculate and log the mean and std for each metric across all files
+        for key, values in aggregated_raw.items():
+
+            mean_val = np.mean(values)
+            std_val = np.std(values)
+
+            final_summary[f'dataset_{key}_mean'] = mean_val
+            final_summary[f'dataset_{key}_std'] = std_val
+
+            log_line = f"Dataset {key}: Mean = {mean_val:.6f} ± {std_val:.6f}\n"
+            print(log_line.strip())
+            f.write(log_line)
+
+    return final_summary

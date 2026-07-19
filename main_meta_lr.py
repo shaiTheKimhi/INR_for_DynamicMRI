@@ -119,7 +119,6 @@ epoch = params['epochs']
 relL2_eps = 1e-4
 
 log_path = './log_cmr_meta/spoke{}_{}'.format(spoke_num, str(datetime.datetime.now().strftime('%y%m%d_%H%M%S')))
-log_path = './log_cmr_meta/spoke13_260712_135613_test'
 
 path_checker(log_path)
 writer = SummaryWriter(log_path)
@@ -130,13 +129,13 @@ cds_train = CineDataset(args.train_data_dir)
 cds_valid = CineDataset(args.valid_data_dir)
 cds_test = CineDataset(args.test_data_dir)
 
-# Filter examples that do not contain cine_lax.mat to avoid FileNotFoundError (using test set for meta‑training pool)
+# Filter validation examples to avoid FileNotFoundError
 valid_indices = [
     i for i, ex in enumerate(cds_valid.file_paths)
-    if os.path.exists(os.path.join(cds_valid.directory, ex))
+    if os.path.exists(ex)
 ]
 if len(valid_indices) == 0:
-    raise ValueError(f"No valid examples containing 'cine_lax.mat' found in {args.test_data_dir}")
+    raise ValueError(f"No validation examples found in {args.valid_data_dir}")
 
 # Use the first valid example as the test subject
 test_subject_idx = 0
@@ -196,10 +195,14 @@ kdata_val = val_nufft_op.forward(img_gt_val).reshape([frames_val, coil_num_val, 
 meta_inr = INR(val_nufft_op, params, meta_lr, relL2_eps)
 meta_inr.to(device) if hasattr(meta_inr, 'to') else None
 
-# Training pool indices (exclude test subject)
-train_indices = [i for i in valid_indices if i != test_subject_idx]
+# Training pool indices from train dataset (only sax views)
+train_indices = [
+    i for i, path in enumerate(cds_train.file_paths)
+    if "sax" in os.path.basename(path)
+]
 if len(train_indices) == 0:
-    train_indices = [test_subject_idx]
+    train_indices = list(range(len(cds_train)))
+print(f"Meta-training pool has {len(train_indices)} sax subject(s) from train dataset.")
 
 
 # Remove early‑stopping variables
@@ -214,12 +217,15 @@ for me in range(meta_epochs):
         # Sample a subject from training pool
         sub_idx = np.random.choice(train_indices)
         try:
-            x_sub = train_ds[sub_idx]
-        except:
+            kspace, source_file = train_ds.load_canonical_kspace(sub_idx)
+            nz = kspace.shape[3]
+            z_index_sub = np.random.randint(0, nz)
+            x_sub = train_ds.get_slice(sub_idx, z_index_sub, kspace=kspace)
+        except Exception as e:
             continue
 
-        img_sub = x_sub['img'].to(device)
-        smap_sub = x_sub['smap'].to(device)
+        img_sub = torch.as_tensor(x_sub['img']).to(device)
+        smap_sub = torch.as_tensor(x_sub['smap']).to(device)
         frames_sub = img_sub.shape[0]
         coil_num_sub = img_sub.shape[1]
         grid_size_sub = img_sub.shape[-1]

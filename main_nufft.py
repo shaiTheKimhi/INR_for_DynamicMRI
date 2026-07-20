@@ -12,6 +12,7 @@ import torchvision.models as models
 parser = argparse.ArgumentParser()
 parser.add_argument('-s', '--spokes', type=int, metavar='', required=True)
 parser.add_argument('-g', '--gpu', type=int, metavar='', required=True)
+parser.add_argument('-d', '--data_dir', type=str, metavar='', required=False, default=r"D:\MRI_DATASETS\Test")
 args = parser.parse_args()
 os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
 
@@ -25,11 +26,10 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 spoke_num = args.spokes
 
 # Setup Paths
-base_path = r"/synology-data/users/naamagav/CMRxRec_for_project"
-log_path = os.path.join(base_path, 'log_cmr', 'naive_nufft_spoke{}_{}'.format(spoke_num, str(datetime.datetime.now().strftime('%y%m%d_%H%M%S'))))
+log_path = './log_cmr/naive_nufft_spoke{}_{}'.format(spoke_num, str(datetime.datetime.now().strftime('%y%m%d_%H%M%S')))
 path_checker(log_path)
 
-dataset_path = os.path.join(base_path, 'Example_dataset', 'ChallengeData_test', 'MultiCoil', 'Cine', 'TestSet', 'FullSample')
+dataset_path = args.data_dir
 cds = CineDataset(dataset_path)
 
 ds = CMRxReconToINRDataset(

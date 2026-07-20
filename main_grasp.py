@@ -24,6 +24,7 @@ parser.add_argument('-t', '--tv_weight', type=float, metavar='', required=False,
 parser.add_argument('-lr', '--learning_rate', type=float, metavar='', required=False, default=0.01, help="Adam learning rate")
 parser.add_argument('-i', '--iterations', type=int, metavar='', required=False, default=1000, help="Optimization iterations")
 parser.add_argument('-r', '--relL2', action='store_true', required=False)
+parser.add_argument('-d', '--data_dir', type=str, metavar='', required=False, default=r"D:\MRI_DATASETS\Test")
 args = parser.parse_args()
 os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
 
@@ -44,11 +45,10 @@ spoke_num = args.spokes
 iterations = params['iterations']
 relL2_eps = 1e-4
 
-base_path = r"/synology-data/users/naamagav/CMRxRec_for_project"
-log_path = os.path.join(base_path, 'log_cmr', 'GRASP_spoke{}_{}'.format(spoke_num, str(datetime.datetime.now().strftime('%y%m%d_%H%M%S'))))
+log_path = './log_cmr/GRASP_spoke{}_{}'.format(spoke_num, str(datetime.datetime.now().strftime('%y%m%d_%H%M%S')))
 path_checker(log_path)
 # writer = SummaryWriter(log_path)
-dataset_path = os.path.join(base_path, 'Example_dataset', 'ChallengeData_test', 'MultiCoil', 'Cine', 'TestSet', 'FullSample')
+dataset_path = args.data_dir
 cds = CineDataset(dataset_path)
 
 ds = CMRxReconToINRDataset(

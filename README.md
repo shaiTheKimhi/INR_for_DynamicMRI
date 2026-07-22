@@ -1,5 +1,5 @@
 # INR_for_DynamicMRI
-Official code for "Spatiotemporal implicit neural representation for unsupervised dynamic MRI reconstruction"
+This project serves as a continuation of the work presented in the paper "Spatiotemporal implicit neural representation for unsupervised dynamic MRI reconstruction"
  
 ## 1. Environmental Requirements  
 ### To run the reconstruction demo, the following dependencies are required:  
@@ -41,6 +41,19 @@ To ablate the coarse-to-fine strategy, use the following code:
 python main.py -g 0 -s 13 -r -d /path/to/dataset
 ```
 
+---
+
+### Baseline Reconstructions
+To evaluate the added classical and iterative baselines against the proposed method, use the following scripts:
+
+**NUFFT (Naive) Baseline:**
+```bash
+python main_nufft.py -g 0 -s 13 -d /path/to/dataset
+```
+**GRASP Baseline:**
+```bash
+python main_grasp.py -g 0 -s 13 -r -d /path/to/dataset
+```
 ---
 
 ### Meta-Learning Pretraining & Adaptation (main_meta_lr.py)

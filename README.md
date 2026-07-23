@@ -14,8 +14,14 @@ This project serves as a continuation of the work presented in the paper "Spatio
   * [mat73](https://github.com/skjns/mat73) (e.g. `pip install mat73`)
   * [sigpy](https://github.com/mikgroup/sigpy) (e.g. `pip install sigpy`)
 
-## 2. Sample Data
-Download the sample data from [https://drive.google.com/file/d/1DIdtHcHUDEqx-qL4930-pz9mxCI8OYMR/view?usp=sharing](https://drive.google.com/file/d/1DIdtHcHUDEqx-qL4930-pz9mxCI8OYMR/view?usp=sharing) and put it into the root directory
+## 2. Dataset & Preparation
+
+* **Database Name & Source:** This project uses the **CMRxRecon** dataset: [link](https://www.synapse.org/Synapse:syn51471091/wiki/622170). 
+* **Sample Data:** You can download a sample of the dataset from [here](https://drive.google.com/file/d/1DIdtHcHUDEqx-qL4930-pz9mxCI8OYMR/view?usp=sharing).
+* **File Types:** The code expects and reads **.mat** files. 
+* **Specifying the Data Path:** You do not need to hardcode the path in the scripts. The path to the database should be specified at runtime using the command-line arguments:
+  * For standard reconstructions: Use the `-d` or `--data_dir` flag.
+  * For meta-learning: Use the `--train_data_dir`, `--valid_data_dir`, and `--test_data_dir` flags.
 
 ## 3. Run the Demos
 
